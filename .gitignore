@@ -1,0 +1,27 @@
+# git ignore file
+.vs/
+[Bb]in
+obj/
+[Dd]ebug*/
+[Rr]elease*/
+[Ll]og*/
+*.obj
+*.exe
+*.pdb
+*.user
+*.aps
+*.pch
+*.vspscc
+*_i.c
+*_p.c
+*.ncb
+*.suo
+*.tlb
+*.tlh
+*.bak
+*.cache
+*.ilk
+*.log
+*.lib
+*.sbr
+!bin/Debug/net10.0-windows/proxies.json

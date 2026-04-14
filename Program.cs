@@ -498,7 +498,18 @@ namespace TelegramProxyChecker
 
         private void CopySelectedLink() { var p = dgv.CurrentRow?.Tag as ProxyInfo; if (p != null) Clipboard.SetText(p.GetTelegramLink()); }
         private void CopyAllLinks() { Clipboard.SetText(string.Join(Environment.NewLine, proxies.Select(p => p.GetTelegramLink()))); lblStatus.Text = "📋 Скопировано."; }
-        protected override void OnFormClosing(FormClosingEventArgs e) { _cts?.Cancel(); _autoCheckTimer.Stop(); _autoCheckTimer.Dispose(); base.OnFormClosing(e); }
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            _autoCheckTimer.Stop();
+            _autoCheckTimer.Dispose();
+
+            // 🔹 Безопасная отмена: ловим исключение, если объект уже удалён
+            try { _cts?.Cancel(); }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { } // На случай других состояний
+
+            base.OnFormClosing(e);
+        }
     }
 
     static class Program

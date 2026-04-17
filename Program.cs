@@ -27,6 +27,7 @@ namespace TelegramProxyChecker
         public DateTime LastCheck { get; set; }
         public DateTime DateAdded { get; set; }
         public int Frequency { get; set; } = 1000;
+        public DateTime LastOnline { get; set; } // 🔹 Новое поле
 
         public string GetTelegramLink() => $"https://t.me/proxy?server={Host}&port={Port}&secret={Secret}";
     }
@@ -37,7 +38,7 @@ namespace TelegramProxyChecker
         private DataGridView dgv;
         private ComboBox cmbType;
         private NumericUpDown nudPort;
-        private TextBox txtHost, txtSecret, txtLink, txtSearch; // 🔹 txtSearch добавлен
+        private TextBox txtHost, txtSecret, txtLink, txtSearch;
         private Button btnAdd, btnAddLink, btnImportHtml, btnRemove, btnCheck, btnStop;
         private CheckBox chkHideOnline, chkHideOffline, chkHideUnknown, chkAutoCheck;
         private ProgressBar pbProgress;
@@ -50,6 +51,10 @@ namespace TelegramProxyChecker
         private CancellationTokenSource _cts;
         private bool _isChecking = false;
         private readonly System.Windows.Forms.Timer _autoCheckTimer = new System.Windows.Forms.Timer { Interval = 30000 };
+
+        // 🔹 Состояние сортировки
+        private int _sortColumn = 7; // По умолчанию DateAdded
+        private bool _sortDescending = true;
 
         public MainForm()
         {
@@ -68,9 +73,9 @@ namespace TelegramProxyChecker
         private void InitializeComponent()
         {
             this.Text = "Telegram Proxy Checker";
-            this.Size = new System.Drawing.Size(1150, 680);
+            this.Size = new System.Drawing.Size(1200, 700);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.MinimumSize = new System.Drawing.Size(850, 500);
+            this.MinimumSize = new System.Drawing.Size(900, 500);
 
             // --- DataGridView Setup ---
             dgv = new DataGridView
@@ -82,7 +87,8 @@ namespace TelegramProxyChecker
                 MultiSelect = true,
                 AllowUserToResizeColumns = true,
                 ReadOnly = false,
-                VirtualMode = false
+                VirtualMode = false,
+                //AllowUserToSortColumns = false // Отключаем встроенную сортировку грида, используем свою
             };
             dgv.Columns.Add("Type", "Type");
             dgv.Columns.Add("Host", "Host / Server");
@@ -93,36 +99,18 @@ namespace TelegramProxyChecker
             dgv.Columns.Add("LastCheck", "Last Check");
             dgv.Columns.Add("DateAdded", "Date Added");
             dgv.Columns.Add("Frequency", "Frequency");
+            dgv.Columns.Add("LastOnline", "Last Online"); // 🔹 Новый столбец
 
             dgv.Columns[1].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
             dgv.Columns[8].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dgv.Columns[9].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             dgv.Columns[8].ToolTipText = "0 = Никогда, 1000 = Всегда";
 
             foreach (DataGridViewColumn col in dgv.Columns) col.ReadOnly = true;
             dgv.Columns["Frequency"].ReadOnly = false;
 
-            // --- 🔹 SORTING BY CLICK ---
-            dgv.ColumnHeaderMouseClick += (s, e) =>
-            {
-                if (e.RowIndex < 0) return;
-                var currentCol = dgv.Columns[e.ColumnIndex].Name;
-                // Простая логика переключения сортировки
-                var orderDesc = true;
-
-                // Сортировка
-                if (e.ColumnIndex == 0) proxies = orderDesc ? proxies.OrderByDescending(p => p.Type).ToList() : proxies.OrderBy(p => p.Type).ToList();
-                else if (e.ColumnIndex == 1) proxies = orderDesc ? proxies.OrderByDescending(p => p.Host).ToList() : proxies.OrderBy(p => p.Host).ToList();
-                else if (e.ColumnIndex == 2) proxies = orderDesc ? proxies.OrderByDescending(p => p.Port).ToList() : proxies.OrderBy(p => p.Port).ToList();
-                else if (e.ColumnIndex == 3) proxies = orderDesc ? proxies.OrderByDescending(p => p.Secret).ToList() : proxies.OrderBy(p => p.Secret).ToList();
-                else if (e.ColumnIndex == 4) proxies = orderDesc ? proxies.OrderByDescending(p => p.Status).ToList() : proxies.OrderBy(p => p.Status).ToList();
-                else if (e.ColumnIndex == 5) proxies = orderDesc ? proxies.OrderByDescending(p => p.Latency).ToList() : proxies.OrderBy(p => p.Latency).ToList();
-                else if (e.ColumnIndex == 6) proxies = orderDesc ? proxies.OrderByDescending(p => p.LastCheck).ToList() : proxies.OrderBy(p => p.LastCheck).ToList();
-                else if (e.ColumnIndex == 7) proxies = orderDesc ? proxies.OrderByDescending(p => p.DateAdded.Ticks).ToList() : proxies.OrderBy(p => p.DateAdded.Ticks).ToList(); // 🔹 Полная дата
-                else if (e.ColumnIndex == 8) proxies = orderDesc ? proxies.OrderByDescending(p => p.Frequency).ToList() : proxies.OrderBy(p => p.Frequency).ToList();
-
-                RefreshGrid();
-                lblStatus.Text = $"🔃 Сортировка: {dgv.Columns[e.ColumnIndex].HeaderText}";
-            };
+            // 🔹 Сортировка по клику на заголовок
+            dgv.ColumnHeaderMouseClick += Dgv_ColumnHeaderMouseClick;
 
             // --- Click to Open Link ---
             dgv.CellClick += (s, e) =>
@@ -150,7 +138,7 @@ namespace TelegramProxyChecker
 
             // --- Context Menu (Check Selected, Copy, etc) ---
             cmsGrid = new ContextMenuStrip();
-            cmsGrid.Items.Add("🔍 Check Selected", null, (s, e) => CheckSelectedProxiesAsync()); // 🔹 Проверка выбранных
+            cmsGrid.Items.Add("🔍 Check Selected", null, (s, e) => CheckSelectedProxiesAsync());
             cmsGrid.Items.Add(new ToolStripSeparator());
             cmsGrid.Items.Add("🔗 Copy Link", null, (s, e) => CopySelectedLink());
             cmsGrid.Items.Add("📋 Copy All Links", null, (s, e) => CopyAllLinks());
@@ -197,6 +185,40 @@ namespace TelegramProxyChecker
             this.Controls.AddRange(new Control[] { dgv, panel1, panel2, pbProgress, lblStatus });
         }
 
+        // 🔹 Метод сортировки
+        private void Dgv_ColumnHeaderMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.ColumnIndex < 0 || e.ColumnIndex >= dgv.Columns.Count) return;
+
+            // Переключаем направление, если кликнули по тому же столбцу
+            if (_sortColumn == e.ColumnIndex) _sortDescending = !_sortDescending;
+            else { _sortColumn = e.ColumnIndex; _sortDescending = true; }
+
+            ApplySorting();
+            lblStatus.Text = $"🔃 Сортировка: {dgv.Columns[e.ColumnIndex].HeaderText} ({(_sortDescending ? "↓" : "↑")})";
+        }
+
+        private void ApplySorting()
+        {
+            // Сортировка работает напрямую с типами (DateTime, int, string), поэтому 
+            // даты сравниваются хронологически, а числа - математически.
+            proxies = _sortColumn switch
+            {
+                0 => _sortDescending ? proxies.OrderByDescending(p => p.Type).ToList() : proxies.OrderBy(p => p.Type).ToList(),
+                1 => _sortDescending ? proxies.OrderByDescending(p => p.Host, StringComparer.OrdinalIgnoreCase).ToList() : proxies.OrderBy(p => p.Host, StringComparer.OrdinalIgnoreCase).ToList(),
+                2 => _sortDescending ? proxies.OrderByDescending(p => p.Port).ToList() : proxies.OrderBy(p => p.Port).ToList(),
+                3 => _sortDescending ? proxies.OrderByDescending(p => p.Secret, StringComparer.OrdinalIgnoreCase).ToList() : proxies.OrderBy(p => p.Secret, StringComparer.OrdinalIgnoreCase).ToList(),
+                4 => _sortDescending ? proxies.OrderByDescending(p => p.Status).ToList() : proxies.OrderBy(p => p.Status).ToList(),
+                5 => _sortDescending ? proxies.OrderByDescending(p => p.Latency).ToList() : proxies.OrderBy(p => p.Latency).ToList(),
+                6 => _sortDescending ? proxies.OrderByDescending(p => p.LastCheck).ToList() : proxies.OrderBy(p => p.LastCheck).ToList(),
+                7 => _sortDescending ? proxies.OrderByDescending(p => p.DateAdded).ToList() : proxies.OrderBy(p => p.DateAdded).ToList(),
+                8 => _sortDescending ? proxies.OrderByDescending(p => p.Frequency).ToList() : proxies.OrderBy(p => p.Frequency).ToList(),
+                9 => _sortDescending ? proxies.OrderByDescending(p => p.LastOnline).ToList() : proxies.OrderBy(p => p.LastOnline).ToList(),
+                _ => proxies
+            };
+            RefreshGrid();
+        }
+
         private void LoadProxies()
         {
             if (File.Exists(JsonFile))
@@ -214,9 +236,7 @@ namespace TelegramProxyChecker
                 catch { proxies = new List<ProxyInfo>(); }
             }
             RemoveDuplicates();
-            // Сортировка по умолчанию
-            proxies = proxies.OrderByDescending(p => p.DateAdded.Ticks).ToList();
-            RefreshGrid();
+            ApplySorting(); // Применяем сортировку при загрузке
         }
 
         private void SaveProxies()
@@ -235,19 +255,23 @@ namespace TelegramProxyChecker
 
             foreach (var p in proxies)
             {
-                // Filters
                 if (p.Status == ProxyStatus.Online && chkHideOnline.Checked) continue;
                 if (p.Status == ProxyStatus.Offline && chkHideOffline.Checked) continue;
                 if (p.Status == ProxyStatus.Unknown && chkHideUnknown.Checked) continue;
-
-                // 🔹 Search
                 if (hasFilter && !p.Host.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
 
                 var row = new DataGridViewRow();
-                row.CreateCells(dgv, p.Type.ToString(), p.Host, p.Port, p.Secret, p.Status.ToString(),
+                row.CreateCells(dgv,
+                    p.Type.ToString(),
+                    p.Host,
+                    p.Port,
+                    p.Secret,
+                    p.Status.ToString(),
                     p.Latency >= 0 ? p.Latency.ToString() : "-",
-                    p.LastCheck == default ? "-" : p.LastCheck.ToString("g"),
-                    p.DateAdded.ToString("dd.MM.yyyy HH:mm"), p.Frequency);
+                    p.LastCheck == default ? "-" : p.LastCheck.ToString("dd.MM.yyyy HH:mm"),
+                    p.DateAdded.ToString("dd.MM.yyyy HH:mm"),
+                    p.Frequency,
+                    p.LastOnline == default ? "-" : p.LastOnline.ToString("dd.MM.yyyy HH:mm"));
                 row.Tag = p;
                 dgv.Rows.Add(row);
             }
@@ -356,7 +380,7 @@ namespace TelegramProxyChecker
 
         private void BtnStop_Click(object sender, EventArgs e) { _cts?.Cancel(); lblStatus.Text = "⛔ Остановка..."; }
 
-        // 🔹 CHECK SELECTED (Проверка только выбранных)
+        // 🔹 CHECK SELECTED
         private async Task CheckSelectedProxiesAsync()
         {
             var selected = dgv.SelectedRows.Cast<DataGridViewRow>()
@@ -367,20 +391,16 @@ namespace TelegramProxyChecker
             btnCheck.Enabled = false; btnStop.Enabled = true; this.Cursor = Cursors.WaitCursor;
             lblStatus.Text = $"⏳ Проверка {selected.Count} выбранных прокси...";
 
-            // Используем тот же метод проверки, что и для всех
             await Task.WhenAll(selected.Select(async p =>
             {
                 var (online, lat, _) = await CheckProxyAsync(p.Host, p.Port, p.Secret, 3000, CancellationToken.None);
                 p.Status = online ? ProxyStatus.Online : ProxyStatus.Offline;
                 p.Latency = lat; p.LastCheck = DateTime.Now;
                 p.Frequency = online ? Math.Min(1000, p.Frequency + 1) : Math.Max(0, p.Frequency - 1);
+                if (online) p.LastOnline = DateTime.Now; // 🔹 Обновляем дату последнего онлайна
             }));
 
-            proxies = proxies.OrderByDescending(p => p.Status == ProxyStatus.Online)
-                             .ThenBy(p => p.Latency >= 0 ? p.Latency : int.MaxValue)
-                             .ThenBy(p => p.DateAdded.Ticks)
-                             .ToList();
-            RefreshGrid(); SaveProxies();
+            ApplySorting(); SaveProxies();
             btnCheck.Enabled = true; btnStop.Enabled = false; this.Cursor = Cursors.Default;
             lblStatus.Text = $"✅ Проверка выбранных завершена. Онлайн: {selected.Count(p => p.Status == ProxyStatus.Online)} из {selected.Count}.";
         }
@@ -406,19 +426,20 @@ namespace TelegramProxyChecker
                 {
                     if (ct.IsCancellationRequested) return;
 
-                    // Логика частоты
                     if (respectFrequency)
                     {
                         if (p.Frequency == 0) return;
                         if (Random.Shared.Next(1000) >= p.Frequency) return;
                     }
 
-                    // 🔹 Вызов проверки с секретом
                     var (online, lat, _) = await CheckProxyAsync(p.Host, p.Port, p.Secret, 3000, ct);
-
                     p.Status = online ? ProxyStatus.Online : ProxyStatus.Offline;
                     p.Latency = lat; p.LastCheck = DateTime.Now;
-                    if (online) Interlocked.Increment(ref onlineCount);
+                    if (online)
+                    {
+                        Interlocked.Increment(ref onlineCount);
+                        p.LastOnline = DateTime.Now; // 🔹 Обновляем дату последнего онлайна
+                    }
                     p.Frequency = online ? Math.Min(1000, p.Frequency + 1) : Math.Max(0, p.Frequency - 1);
 
                     int count = Interlocked.Increment(ref checkedCount);
@@ -435,11 +456,7 @@ namespace TelegramProxyChecker
                 if (_cts.IsCancellationRequested) lblStatus.Text = "⛔ Проверка остановлена пользователем.";
                 else
                 {
-                    proxies = proxies.OrderByDescending(p => p.Status == ProxyStatus.Online)
-                                     .ThenBy(p => p.Latency >= 0 ? p.Latency : int.MaxValue)
-                                     .ThenBy(p => p.DateAdded.Ticks)
-                                     .ToList();
-                    RefreshGrid(); SaveProxies();
+                    ApplySorting(); SaveProxies();
                     lblStatus.Text = chkAutoCheck.Checked
                         ? $"✅ Готово. Авто-проверка активна. Онлайн: {onlineCount} из {proxies.Count}."
                         : $"✅ Готово. Онлайн: {onlineCount} из {proxies.Count}.";
@@ -461,7 +478,6 @@ namespace TelegramProxyChecker
                 cts.CancelAfter(timeoutMs);
 
                 await tcp.ConnectAsync(host, port).WaitAsync(cts.Token);
-
                 using var stream = tcp.GetStream();
                 stream.ReadTimeout = timeoutMs;
                 stream.WriteTimeout = timeoutMs;
@@ -498,16 +514,12 @@ namespace TelegramProxyChecker
 
         private void CopySelectedLink() { var p = dgv.CurrentRow?.Tag as ProxyInfo; if (p != null) Clipboard.SetText(p.GetTelegramLink()); }
         private void CopyAllLinks() { Clipboard.SetText(string.Join(Environment.NewLine, proxies.Select(p => p.GetTelegramLink()))); lblStatus.Text = "📋 Скопировано."; }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            _cts?.Cancel();
             _autoCheckTimer.Stop();
             _autoCheckTimer.Dispose();
-
-            // 🔹 Безопасная отмена: ловим исключение, если объект уже удалён
-            try { _cts?.Cancel(); }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) { } // На случай других состояний
-
             base.OnFormClosing(e);
         }
     }

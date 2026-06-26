@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
+using System.Resources;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -98,7 +99,7 @@ namespace TelegramProxyChecker
             dgv.Columns.Add("Latency", "Ping (ms)");
             dgv.Columns.Add("LastCheck", "Last Check");
             dgv.Columns.Add("DateAdded", "Date Added");
-            dgv.Columns.Add("Frequency", "Frequency");
+            dgv.Columns.Add("Frequency", "Frequency Check");
             dgv.Columns.Add("LastOnline", "Last Online"); // 🔹 Новый столбец
 
             dgv.Columns[1].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
@@ -517,9 +518,14 @@ namespace TelegramProxyChecker
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            _cts?.Cancel();
             _autoCheckTimer.Stop();
             _autoCheckTimer.Dispose();
+
+            // 🔹 Безопасная отмена: ловим исключение, если объект уже удалён
+            try { _cts?.Cancel(); }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { } // На случай других состояний
+
             base.OnFormClosing(e);
         }
     }
